@@ -1,14 +1,10 @@
-// Test script to verify scheduler functionality
+/ Test script to verify scheduler functionality
 // Run with: node test-scheduler.js
 
-// Use local URL for local testing, or your production URL
-const API_URL = 'https://corprex-scheduler.onrender.com/api'; 
-// For local testing, change to: 'http://localhost:3000/api'
+const API_URL = 'http://localhost:3000/api'; // Update this if deployed
 
 async function testScheduler() {
     console.log('🧪 Testing Corprex Scheduler API...\n');
-    console.log('API URL:', API_URL);
-    console.log('Note: If using Render free tier, first request may take 30-60 seconds\n');
     
     // Test 1: Health Check
     console.log('1️⃣ Testing Health Check...');
@@ -18,7 +14,7 @@ async function testScheduler() {
         console.log('✅ Health Check:', healthData);
     } catch (error) {
         console.log('❌ Health Check Failed:', error.message);
-        console.log('Make sure the server is running or deployed!');
+        console.log('Make sure the server is running!');
         return;
     }
     
@@ -90,9 +86,7 @@ async function testScheduler() {
         const bookData = await bookResponse.json();
         if (bookResponse.ok) {
             console.log('✅ Meeting booked successfully!', bookData);
-            console.log('\n⚠️  Note: Emails will be sent to:');
-            console.log('   - Customer: test@example.com');
-            console.log('   - Admin: admin@corprex.com');
+            console.log('\n⚠️  Note: Check your email for confirmation (if email is configured)');
         } else {
             console.log('❌ Booking failed:', bookData);
         }
@@ -114,10 +108,10 @@ async function testScheduler() {
     }
     
     console.log('\n✨ Testing complete!');
-    console.log('\nYour configuration:');
-    console.log('- Email: sales@corprex.com');
-    console.log('- Admin: admin@corprex.com');
-    console.log('- API: https://corprex-scheduler.onrender.com/api');
+    console.log('\nNext steps:');
+    console.log('1. Make sure EMAIL_USER and EMAIL_PASS are set in .env');
+    console.log('2. Update scheduler-api.js with your API URL');
+    console.log('3. Test the scheduler in your browser');
 }
 
 // Run tests
