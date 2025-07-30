@@ -3,7 +3,7 @@
 
 const SCHEDULER_API = {
     // IMPORTANT: Update this URL after deploying to Render
-    baseURL: 'https://corprex-scheduler.onrender.com', // Change to: https://your-app.onrender.com/api
+    baseURL: 'https://corprex-scheduler.onrender.com/api', // Change to: https://your-app.onrender.com/api
     
     // Check if API is available
     async checkHealth() {
