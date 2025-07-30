@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: corprex-scheduler
+    runtime: node
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: EMAIL_USER
+        sync: false
+      - key: EMAIL_PASS
+        sync: false
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: DATABASE_PATH
+        value: /opt/render/project/src/data/meetings.db

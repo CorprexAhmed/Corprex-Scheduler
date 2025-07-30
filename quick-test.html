@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quick API Test - Corprex Scheduler</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .status {
+            text-align: center;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 20px 0;
+            font-weight: bold;
+        }
+        .status.checking {
+            background: #fff3cd;
+            color: #856404;
+        }
+        .status.online {
+            background: #d4edda;
+            color: #155724;
+        }
+        .status.offline {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        .result {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            margin-top: 20px;
+            font-family: monospace;
+            font-size: 14px;
+            max-height: 300px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+        .api-url {
+            background: #e9ecef;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            word-break: break-all;
+        }
+        .test-buttons {
+            text-align: center;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Corprex Scheduler API Test</h1>
+        
+        <div class="status checking" id="status">
+            Checking API connection...
+        </div>
+        
+        <div class="api-url">
+            <strong>API URL:</strong> <span id="apiUrl">Not set</span>
+        </div>
+        
+        <div class="test-buttons">
+            <button onclick="checkHealth()">Check Health</button>
+            <button onclick="testDates()">Test Dates</button>
+            <button onclick="testTimes()">Test Times</button>
+            <button onclick="showInstructions()">Setup Instructions</button>
+        </div>
+        
+        <div class="result" id="result" style="display:none;"></div>
+    </div>
+
+    <script>
+        // IMPORTANT: Update this URL after deploying to Render
+        const API_URL = 'http://localhost:3000/api';
+        // Change to: https://your-app-name.onrender.com/api
+        
+        // Display the current API URL
+        document.getElementById('apiUrl').textContent = API_URL;
+        
+        // Check connection on load
+        window.addEventListener('load', checkConnection);
+        
+        async function checkConnection() {
+            const statusEl = document.getElementById('status');
+            statusEl.className = 'status checking';
+            statusEl.textContent = 'Checking API connection...';
+            
+            try {
+                const response = await fetch(`${API_URL}/health`);
+                if (response.ok) {
+                    const data = await response.json();
+                    statusEl.className = 'status online';
+                    statusEl.textContent = '✅ API is online and working!';
+                    showResult({
+                        status: 'Connected successfully!',
+                        apiHealth: data
+                    });
+                } else {
+                    throw new Error('API returned an error');
+                }
+            } catch (error) {
+                statusEl.className = 'status offline';
+                if (API_URL.includes('localhost')) {
+                    statusEl.textContent = '❌ API is offline - Make sure server is running locally';
+                } else {
+                    statusEl.textContent = '❌ API is offline - It may be starting up (takes 30-60 seconds)';
+                }
+                showResult({
+                    error: error.message,
+                    suggestion: 'If using Render free tier, the first request can take up to 60 seconds'
+                });
+            }
+        }
+        
+        function showResult(data) {
+            const resultEl = document.getElementById('result');
+            resultEl.textContent = JSON.stringify(data, null, 2);
+            resultEl.style.display = 'block';
+        }
+        
+        async function checkHealth() {
+            try {
+                const response = await fetch(`${API_URL}/health`);
+                const data = await response.json();
+                showResult({
+                    endpoint: '/api/health',
+                    response: data
+                });
+            } catch (error) {
+                showResult({
+                    endpoint: '/api/health',
+                    error: error.message
+                });
+            }
+        }
+        
+        async function testDates() {
+            try {
+                const now = new Date();
+                const year = now.getFullYear();
+                const month = now.getMonth() + 1;
+                
+                const response = await fetch(`${API_URL}/availability/dates?year=${year}&month=${month}`);
+                const data = await response.json();
+                showResult({
+                    endpoint: `/api/availability/dates?year=${year}&month=${month}`,
+                    response: data,
+                    count: data.availableDates ? data.availableDates.length : 0
+                });
+            } catch (error) {
+                showResult({
+                    endpoint: '/api/availability/dates',
+                    error: error.message
+                });
+            }
+        }
+        
+        async function testTimes() {
+            try {
+                // First get available dates
+                const now = new Date();
+                const year = now.getFullYear();
+                const month = now.getMonth() + 1;
+                
+                const datesResponse = await fetch(`${API_URL}/availability/dates?year=${year}&month=${month}`);
+                const datesData = await datesResponse.json();
+                
+                if (datesData.availableDates && datesData.availableDates.length > 0) {
+                    const testDate = datesData.availableDates[0];
+                    const response = await fetch(`${API_URL}/availability/times?date=${testDate}`);
+                    const data = await response.json();
+                    
+                    showResult({
+                        endpoint: `/api/availability/times?date=${testDate}`,
+                        response: data,
+                        count: data.availableTimes ? data.availableTimes.length : 0
+                    });
+                } else {
+                    showResult({
+                        endpoint: '/api/availability/times',
+                        error: 'No available dates found to test times'
+                    });
+                }
+            } catch (error) {
+                showResult({
+                    endpoint: '/api/availability/times',
+                    error: error.message
+                });
+            }
+        }
+        
+        function showInstructions() {
+            showResult({
+                "Setup Instructions": {
+                    "1": "Deploy backend to Render.com (or another service)",
+                    "2": "Get your API URL (e.g., https://your-app.onrender.com)",
+                    "3": "Update API_URL in this file and scheduler-api.js",
+                    "4": "Upload updated scheduler-api.js to your website",
+                    "5": "Test the scheduler on your contact page",
+                    "Note": "Render free tier sleeps after 15 min - first request will be slow"
+                },
+                "Current Configuration": {
+                    "API_URL": API_URL,
+                    "Is Local": API_URL.includes('localhost'),
+                    "Next Step": API_URL.includes('localhost') ? 
+                        "Deploy to cloud and update URL" : 
+                        "Verify API is responding and update your website files"
+                }
+            });
+        }
+    </script>
+</body>
+</html>

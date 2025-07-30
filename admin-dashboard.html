@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard - Corprex Scheduler</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+            background: #f5f7fa;
+            color: #333;
+            line-height: 1.6;
+        }
+        
+        .header {
+            background: #2c3e50;
+            color: white;
+            padding: 1.5rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .header h1 {
+            font-size: 1.75rem;
+            font-weight: 300;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 2rem auto;
+            padding: 0 1rem;
+        }
+        
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+        
+        .stat-card {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        
+        .stat-number {
+            font-size: 2.5rem;
+            font-weight: bold;
+            color: #3498db;
+        }
+        
+        .stat-label {
+            color: #7f8c8d;
+            font-size: 0.875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .controls {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 2rem;
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        
+        button {
+            background: #3498db;
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.875rem;
+            transition: background 0.2s;
+        }
+        
+        button:hover {
+            background: #2980b9;
+        }
+        
+        button.danger {
+            background: #e74c3c;
+        }
+        
+        button.danger:hover {
+            background: #c0392b;
+        }
+        
+        select {
+            padding: 0.75rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 0.875rem;
+        }
+        
+        .meetings-table {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        th {
+            background: #34495e;
+            color: white;
+            padding: 1rem;
+            text-align: left;
+            font-weight: 500;
+            font-size: 0.875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        td {
+            padding: 1rem;
+            border-bottom: 1px solid #ecf0f1;
+        }
+        
+        tr:hover {
+            background: #f8f9fa;
+        }
+        
+        .status {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+        
+        .status.scheduled {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .status.cancelled {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 3rem;
+            color: #7f8c8d;
+        }
+        
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 1rem;
+            border-radius: 4px;
+            margin-bottom: 1rem;
+        }
+        
+        .empty {
+            text-align: center;
+            padding: 3rem;
+            color: #7f8c8d;
+        }
+        
+        @media (max-width: 768px) {
+            .meetings-table {
+                overflow-x: auto;
+            }
+            
+            table {
+                min-width: 600px;
+            }
+        }
+        
+        .api-config {
+            background: #fff3cd;
+            color: #856404;
+            padding: 1rem;
+            border-radius: 4px;
+            margin-bottom: 1rem;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📊 Corprex Scheduler - Admin Dashboard</h1>
+    </div>
+    
+    <div class="container">
+        <div class="api-config" id="apiConfig">
+            ⚠️ Please update the API_URL in this file to your Render URL
+        </div>
+        
+        <div class="stats">
+            <div class="stat-card">
+                <div class="stat-number" id="totalMeetings">0</div>
+                <div class="stat-label">Total Meetings</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number" id="scheduledMeetings">0</div>
+                <div class="stat-label">Scheduled</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number" id="cancelledMeetings">0</div>
+                <div class="stat-label">Cancelled</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number" id="todayMeetings">0</div>
+                <div class="stat-label">Today's Meetings</div>
+            </div>
+        </div>
+        
+        <div class="controls">
+            <button onclick="refreshData()">🔄 Refresh</button>
+            <select id="filterStatus" onchange="filterMeetings()">
+                <option value="">All Meetings</option>
+                <option value="scheduled">Scheduled Only</option>
+                <option value="cancelled">Cancelled Only</option>
+            </select>
+            <button onclick="exportData()">📥 Export CSV</button>
+        </div>
+        
+        <div class="meetings-table">
+            <div class="loading" id="loading">Loading meetings...</div>
+            <div class="error" id="error" style="display:none;"></div>
+            <table id="meetingsTable" style="display:none;">
+                <thead>
+                    <tr>
+                        <th>Date & Time</th>
+                        <th>Name</th>
+                        <th>Company</th>
+                        <th>Email</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="meetingsBody">
+                </tbody>
+            </table>
+            <div class="empty" id="emptyState" style="display:none;">
+                No meetings found
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // IMPORTANT: Update this to your Render URL
+        const API_URL = 'http://localhost:3000/api';
+        // Change to: https://your-app-name.onrender.com/api
+        
+        let allMeetings = [];
+        
+        // Check if API URL is configured
+        if (API_URL.includes('localhost') || API_URL.includes('your-app-name')) {
+            document.getElementById('apiConfig').style.display = 'block';
+        }
+        
+        // Load meetings on page load
+        window.addEventListener('load', loadMeetings);
+        
+        async function loadMeetings() {
+            const loading = document.getElementById('loading');
+            const error = document.getElementById('error');
+            const table = document.getElementById('meetingsTable');
+            const empty = document.getElementById('emptyState');
+            
+            loading.style.display = 'block';
+            error.style.display = 'none';
+            table.style.display = 'none';
+            empty.style.display = 'none';
+            
+            try {
+                const response = await fetch(`${API_URL}/meetings`);
+                if (!response.ok) {
+                    throw new Error('Failed to fetch meetings');
+                }
+                
+                const data = await response.json();
+                allMeetings = data.meetings || [];
+                
+                updateStats();
+                displayMeetings(allMeetings);
+                
+            } catch (err) {
+                loading.style.display = 'none';
+                error.style.display = 'block';
+                error.textContent = `Error: ${err.message}. Make sure the API is running.`;
+            }
+        }
+        
+        function updateStats() {
+            const total = allMeetings.length;
+            const scheduled = allMeetings.filter(m => m.status === 'scheduled').length;
+            const cancelled = allMeetings.filter(m => m.status === 'cancelled').length;
+            
+            const today = new Date().toISOString().split('T')[0];
+            const todayMeetings = allMeetings.filter(m => 
+                m.meetingDate === today && m.status === 'scheduled'
+            ).length;
+            
+            document.getElementById('totalMeetings').textContent = total;
+            document.getElementById('scheduledMeetings').textContent = scheduled;
+            document.getElementById('cancelledMeetings').textContent = cancelled;
+            document.getElementById('todayMeetings').textContent = todayMeetings;
+        }
+        
+        function displayMeetings(meetings) {
+            const loading = document.getElementById('loading');
+            const table = document.getElementById('meetingsTable');
+            const tbody = document.getElementById('meetingsBody');
+            const empty = document.getElementById('emptyState');
+            
+            loading.style.display = 'none';
+            
+            if (meetings.length === 0) {
+                empty.style.display = 'block';
+                table.style.display = 'none';
+                return;
+            }
+            
+            empty.style.display = 'none';
+            table.style.display = 'table';
+            
+            tbody.innerHTML = meetings.map(meeting => `
+                <tr>
+                    <td>
+                        <strong>${formatDate(meeting.meetingDate)}</strong><br>
+                        <small>${meeting.meetingTime}</small>
+                    </td>
+                    <td>${meeting.firstName} ${meeting.lastName}</td>
+                    <td>${meeting.company}</td>
+                    <td>
+                        <a href="mailto:${meeting.email}">${meeting.email}</a>
+                        ${meeting.phone ? `<br><small>${meeting.phone}</small>` : ''}
+                    </td>
+                    <td>
+                        <span class="status ${meeting.status}">${meeting.status}</span>
+                    </td>
+                    <td>
+                        ${meeting.status === 'scheduled' ? 
+                            `<button class="danger" onclick="cancelMeeting('${meeting.id}')">Cancel</button>` : 
+                            '-'
+                        }
+                    </td>
+                </tr>
+            `).join('');
+        }
+        
+        function formatDate(dateStr) {
+            const date = new Date(dateStr + 'T00:00:00');
+            const options = { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' };
+            return date.toLocaleDateString('en-US', options);
+        }
+        
+        function filterMeetings() {
+            const filter = document.getElementById('filterStatus').value;
+            const filtered = filter ? 
+                allMeetings.filter(m => m.status === filter) : 
+                allMeetings;
+            displayMeetings(filtered);
+        }
+        
+        async function cancelMeeting(meetingId) {
+            if (!confirm('Are you sure you want to cancel this meeting?')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_URL}/meetings/${meetingId}/cancel`, {
+                    method: 'POST'
+                });
+                
+                if (response.ok) {
+                    alert('Meeting cancelled successfully');
+                    await loadMeetings();
+                } else {
+                    throw new Error('Failed to cancel meeting');
+                }
+            } catch (err) {
+                alert(`Error: ${err.message}`);
+            }
+        }
+        
+        function refreshData() {
+            loadMeetings();
+        }
+        
+        function exportData() {
+            const csv = [
+                ['Date', 'Time', 'First Name', 'Last Name', 'Email', 'Phone', 'Company', 'Status', 'Message'],
+                ...allMeetings.map(m => [
+                    m.meetingDate,
+                    m.meetingTime,
+                    m.firstName,
+                    m.lastName,
+                    m.email,
+                    m.phone || '',
+                    m.company,
+                    m.status,
+                    m.message || ''
+                ])
+            ].map(row => row.map(cell => `"${cell}"`).join(',')).join('\n');
+            
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `meetings-${new Date().toISOString().split('T')[0]}.csv`;
+            a.click();
+        }
+        
+        // Auto-refresh every 30 seconds
+        setInterval(loadMeetings, 30000);
+    </script>
+</body>
+</html>
