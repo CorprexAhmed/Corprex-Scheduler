@@ -1,4 +1,4 @@
-// Cloud-optimized version with better persistence for free tiers
+/ Cloud-optimized version with better persistence for free tiers
 const express = require('express');
 const cors = require('cors');
 const nodemailer = require('nodemailer');
