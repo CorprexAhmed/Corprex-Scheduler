@@ -1,354 +1,754 @@
-// Cloud-optimized version with better persistence for free tiers
+// server.js - Corprex Cloud Backend (Deploy to Render, Railway, or Heroku)
 const express = require('express');
 const cors = require('cors');
-const nodemailer = require('nodemailer');
-const { v4: uuidv4 } = require('uuid');
-const moment = require('moment-timezone');
+const crypto = require('crypto');
 require('dotenv').config();
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 
 // Middleware
-app.use(cors());
+app.use(cors({
+    origin: '*', // Configure this with your actual domain in production
+    credentials: true
+}));
 app.use(express.json());
 
-// In-memory storage (survives on Render/Cyclic better than SQLite)
-// For production, replace with MongoDB Atlas or Redis
-const db = {
-  meetings: new Map(),
-  availability: new Map(),
-  
-  // Initialize availability for next 90 days
-  initializeAvailability() {
-    const slots = [
-      '9:00 AM', '9:30 AM', '10:00 AM', '10:30 AM', '11:00 AM', '11:30 AM',
-      '2:00 PM', '2:30 PM', '3:00 PM', '3:30 PM', '4:00 PM', '4:30 PM'
-    ];
-    
-    const today = moment();
-    for (let i = 0; i < 90; i++) {
-      const date = moment(today).add(i, 'days');
-      const dayOfWeek = date.day();
-      
-      // Skip weekends
-      if (dayOfWeek === 0 || dayOfWeek === 6) continue;
-      
-      const dateStr = date.format('YYYY-MM-DD');
-      slots.forEach(time => {
-        const key = `${dateStr}-${time}`;
-        if (!this.availability.has(key)) {
-          this.availability.set(key, {
-            date: dateStr,
-            time: time,
-            isAvailable: true
-          });
+// MongoDB Setup (using MongoDB Atlas free tier)
+const { MongoClient, ObjectId } = require('mongodb');
+
+// MongoDB connection string - set this in your cloud provider's environment variables
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://username:password@cluster.mongodb.net/corprex?retryWrites=true&w=majority';
+
+let db;
+let collections = {};
+
+// Connect to MongoDB
+async function connectDB() {
+    try {
+        const client = new MongoClient(MONGODB_URI, {
+            useNewUrlParser: true,
+            useUnifiedTopology: true
+        });
+        
+        await client.connect();
+        console.log('✅ Connected to MongoDB Atlas');
+        
+        db = client.db('corprex');
+        
+        // Initialize collections
+        collections.users = db.collection('users');
+        collections.models = db.collection('models');
+        collections.usage = db.collection('usage');
+        collections.apiKeys = db.collection('apiKeys');
+        collections.sessions = db.collection('sessions');
+        
+        // Create indexes for better performance
+        await createIndexes();
+        
+        // Initialize default data
+        await initializeDefaultData();
+        
+        // Clean up expired sessions periodically
+        setInterval(cleanExpiredSessions, 3600000); // Every hour
+        
+    } catch (error) {
+        console.error('❌ MongoDB connection failed:', error);
+        process.exit(1);
+    }
+}
+
+// Create database indexes
+async function createIndexes() {
+    try {
+        await collections.users.createIndex({ username: 1 }, { unique: true });
+        await collections.sessions.createIndex({ token: 1 });
+        await collections.sessions.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+        await collections.usage.createIndex({ timestamp: -1 });
+        await collections.usage.createIndex({ username: 1 });
+        console.log('✅ Database indexes created');
+    } catch (error) {
+        console.error('Index creation error:', error);
+    }
+}
+
+// Initialize default data
+async function initializeDefaultData() {
+    try {
+        // Check if admin exists
+        const adminExists = await collections.users.findOne({ username: 'admin' });
+        
+        if (!adminExists) {
+            await collections.users.insertOne({
+                username: 'admin',
+                password: hashPassword('admin123'),
+                role: 'admin',
+                modelAccess: ['all'],
+                createdAt: new Date(),
+                lastActive: null
+            });
+            console.log('✅ Default admin user created (username: admin, password: admin123)');
         }
-      });
+        
+        // Initialize default models
+        const modelsCount = await collections.models.countDocuments();
+        if (modelsCount === 0) {
+            const defaultModels = [
+                {
+                    modelId: 'gpt-4',
+                    name: 'GPT-4',
+                    provider: 'openai',
+                    enabled: true,
+                    apiKeyRequired: true,
+                    endpoint: 'https://api.openai.com/v1/chat/completions',
+                    createdAt: new Date()
+                },
+                {
+                    modelId: 'gpt-3.5-turbo',
+                    name: 'GPT-3.5 Turbo',
+                    provider: 'openai',
+                    enabled: true,
+                    apiKeyRequired: true,
+                    endpoint: 'https://api.openai.com/v1/chat/completions',
+                    createdAt: new Date()
+                },
+                {
+                    modelId: 'claude-3-opus',
+                    name: 'Claude 3 Opus',
+                    provider: 'anthropic',
+                    enabled: true,
+                    apiKeyRequired: true,
+                    endpoint: 'https://api.anthropic.com/v1/messages',
+                    createdAt: new Date()
+                },
+                {
+                    modelId: 'claude-3-sonnet',
+                    name: 'Claude 3 Sonnet',
+                    provider: 'anthropic',
+                    enabled: true,
+                    apiKeyRequired: true,
+                    endpoint: 'https://api.anthropic.com/v1/messages',
+                    createdAt: new Date()
+                },
+                {
+                    modelId: 'llama-2-70b',
+                    name: 'Llama 2 70B',
+                    provider: 'replicate',
+                    enabled: false,
+                    apiKeyRequired: true,
+                    endpoint: 'https://api.replicate.com/v1/predictions',
+                    createdAt: new Date()
+                },
+                {
+                    modelId: 'mistral-7b',
+                    name: 'Mistral 7B',
+                    provider: 'together',
+                    enabled: false,
+                    apiKeyRequired: true,
+                    endpoint: 'https://api.together.xyz/inference',
+                    createdAt: new Date()
+                }
+            ];
+            
+            await collections.models.insertMany(defaultModels);
+            console.log('✅ Default models initialized');
+        }
+        
+        // Initialize API keys document
+        const apiKeysExist = await collections.apiKeys.findOne({ _id: 'main' });
+        if (!apiKeysExist) {
+            await collections.apiKeys.insertOne({
+                _id: 'main',
+                openai: '',
+                anthropic: '',
+                replicate: '',
+                together: '',
+                huggingface: '',
+                updatedAt: new Date()
+            });
+            console.log('✅ API keys document initialized');
+        }
+        
+    } catch (error) {
+        console.error('Error initializing data:', error);
     }
-  },
-  
-  // Get available dates for a month
-  getAvailableDates(year, month) {
-    const startDate = moment(`${year}-${month}-01`).format('YYYY-MM-DD');
-    const endDate = moment(startDate).endOf('month').format('YYYY-MM-DD');
-    
-    const dates = new Set();
-    for (const [key, slot] of this.availability.entries()) {
-      if (slot.date >= startDate && slot.date <= endDate && slot.isAvailable) {
-        dates.add(slot.date);
-      }
+}
+
+// Utility functions
+function hashPassword(password) {
+    return crypto.createHash('sha256').update(password + (process.env.SALT || 'corprex2024')).digest('hex');
+}
+
+function generateToken() {
+    return crypto.randomBytes(32).toString('hex');
+}
+
+// Clean expired sessions
+async function cleanExpiredSessions() {
+    try {
+        const result = await collections.sessions.deleteMany({
+            expiresAt: { $lt: new Date() }
+        });
+        if (result.deletedCount > 0) {
+            console.log(`Cleaned ${result.deletedCount} expired sessions`);
+        }
+    } catch (error) {
+        console.error('Error cleaning sessions:', error);
     }
-    
-    return Array.from(dates).sort();
-  },
-  
-  // Get available times for a date
-  getAvailableTimes(date) {
-    const times = [];
-    for (const [key, slot] of this.availability.entries()) {
-      if (slot.date === date && slot.isAvailable) {
-        times.push(slot.time);
-      }
+}
+
+// Authentication middleware
+async function authenticate(req, res, next) {
+    try {
+        const token = req.headers.authorization?.split(' ')[1];
+        
+        if (!token) {
+            return res.status(401).json({ error: 'No token provided' });
+        }
+        
+        const session = await collections.sessions.findOne({
+            token,
+            expiresAt: { $gt: new Date() }
+        });
+        
+        if (!session) {
+            return res.status(401).json({ error: 'Invalid or expired token' });
+        }
+        
+        req.user = session.user;
+        next();
+    } catch (error) {
+        console.error('Auth error:', error);
+        res.status(500).json({ error: 'Authentication failed' });
     }
-    
-    // Sort times chronologically
-    return times.sort((a, b) => {
-      const timeA = moment(a, 'h:mm A');
-      const timeB = moment(b, 'h:mm A');
-      return timeA.valueOf() - timeB.valueOf();
-    });
-  },
-  
-  // Check if slot is available
-  isSlotAvailable(date, time) {
-    const key = `${date}-${time}`;
-    const slot = this.availability.get(key);
-    return slot && slot.isAvailable;
-  },
-  
-  // Mark slot as booked
-  bookSlot(date, time) {
-    const key = `${date}-${time}`;
-    const slot = this.availability.get(key);
-    if (slot) {
-      slot.isAvailable = false;
+}
+
+// Admin middleware
+function requireAdmin(req, res, next) {
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Admin access required' });
     }
-  },
-  
-  // Free slot (for cancellations)
-  freeSlot(date, time) {
-    const key = `${date}-${time}`;
-    const slot = this.availability.get(key);
-    if (slot) {
-      slot.isAvailable = true;
-    }
-  }
-};
+    next();
+}
 
-// Initialize availability on startup
-db.initializeAvailability();
-
-// Email configuration
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
-  }
-});
-
-// Keep service alive endpoint for monitoring services
-app.get('/ping', (req, res) => {
-  res.json({ status: 'alive', timestamp: new Date().toISOString() });
-});
-
-// API Routes
-
-// Get available dates for a specific month
-app.get('/api/availability/dates', (req, res) => {
-  const { year, month } = req.query;
-  
-  if (!year || !month) {
-    return res.status(400).json({ error: 'Year and month are required' });
-  }
-  
-  const availableDates = db.getAvailableDates(year, month);
-  res.json({ availableDates });
-});
-
-// Get available time slots for a specific date
-app.get('/api/availability/times', (req, res) => {
-  const { date } = req.query;
-  
-  if (!date) {
-    return res.status(400).json({ error: 'Date is required' });
-  }
-  
-  // Check if date is in the past
-  if (moment(date).isBefore(moment().startOf('day'))) {
-    return res.json({ availableTimes: [] });
-  }
-  
-  let availableTimes = db.getAvailableTimes(date);
-  
-  // If it's today, filter out past times
-  if (moment(date).isSame(moment(), 'day')) {
-    const now = moment();
-    availableTimes = availableTimes.filter(time => {
-      const slotTime = moment(time, 'h:mm A');
-      return slotTime.isAfter(now);
-    });
-  }
-  
-  res.json({ availableTimes });
-});
-
-// Book a meeting
-app.post('/api/meetings/book', async (req, res) => {
-  const {
-    firstName,
-    lastName,
-    email,
-    phone,
-    company,
-    message,
-    date,
-    time,
-    timezone
-  } = req.body;
-  
-  // Validate required fields
-  if (!firstName || !lastName || !email || !company || !date || !time || !timezone) {
-    return res.status(400).json({ error: 'Missing required fields' });
-  }
-  
-  // Check availability
-  if (!db.isSlotAvailable(date, time)) {
-    return res.status(409).json({ error: 'Time slot is no longer available' });
-  }
-  
-  // Create meeting
-  const meetingId = uuidv4();
-  const meeting = {
-    id: meetingId,
-    firstName,
-    lastName,
-    email,
-    phone: phone || '',
-    company,
-    message: message || '',
-    meetingDate: date,
-    meetingTime: time,
-    timezone,
-    status: 'scheduled',
-    createdAt: new Date().toISOString()
-  };
-  
-  // Save meeting
-  db.meetings.set(meetingId, meeting);
-  
-  // Mark time slot as unavailable
-  db.bookSlot(date, time);
-  
-  // Send confirmation emails
-  try {
-    // Format date for email
-    const meetingDateTime = moment.tz(`${date} ${time}`, 'YYYY-MM-DD h:mm A', timezone);
-    const formattedDate = meetingDateTime.format('MMMM D, YYYY');
-    const formattedTime = meetingDateTime.format('h:mm A z');
-    
-    // Email to customer
-    await transporter.sendMail({
-      from: process.env.EMAIL_USER,
-      to: email,
-      subject: 'Meeting Confirmation - Corprex',
-      html: `
-        <h2>Meeting Confirmed!</h2>
-        <p>Dear ${firstName} ${lastName},</p>
-        <p>Your meeting with Corprex has been successfully scheduled.</p>
-        <h3>Meeting Details:</h3>
-        <ul>
-          <li><strong>Date:</strong> ${formattedDate}</li>
-          <li><strong>Time:</strong> ${formattedTime}</li>
-          <li><strong>Duration:</strong> 45 minutes</li>
-          <li><strong>Type:</strong> Strategy Session</li>
-        </ul>
-        <p>We'll send you a calendar invitation shortly. Looking forward to discussing how Corprex can transform your AI infrastructure.</p>
-        <p>Best regards,<br>The Corprex Team</p>
-      `
-    });
-    
-    // Email to admin
-    await transporter.sendMail({
-      from: process.env.EMAIL_USER,
-      to: process.env.ADMIN_EMAIL || process.env.EMAIL_USER,
-      subject: 'New Meeting Scheduled',
-      html: `
-        <h2>New Meeting Scheduled</h2>
-        <h3>Contact Details:</h3>
-        <ul>
-          <li><strong>Name:</strong> ${firstName} ${lastName}</li>
-          <li><strong>Email:</strong> ${email}</li>
-          <li><strong>Phone:</strong> ${phone || 'Not provided'}</li>
-          <li><strong>Company:</strong> ${company}</li>
-        </ul>
-        <h3>Meeting Details:</h3>
-        <ul>
-          <li><strong>Date:</strong> ${formattedDate}</li>
-          <li><strong>Time:</strong> ${formattedTime}</li>
-          <li><strong>Message:</strong> ${message || 'No message'}</li>
-        </ul>
-        <p><strong>Meeting ID:</strong> ${meetingId}</p>
-      `
-    });
-  } catch (emailError) {
-    console.error('Email error:', emailError);
-    // Don't fail the booking if email fails
-  }
-  
-  res.json({
-    success: true,
-    meetingId,
-    message: 'Meeting scheduled successfully'
-  });
-});
-
-// Get all meetings (admin endpoint - should be protected in production)
-app.get('/api/meetings', (req, res) => {
-  const { status } = req.query;
-  
-  let meetings = Array.from(db.meetings.values());
-  
-  if (status) {
-    meetings = meetings.filter(m => m.status === status);
-  }
-  
-  // Sort by date and time
-  meetings.sort((a, b) => {
-    const dateA = moment(`${a.meetingDate} ${a.meetingTime}`, 'YYYY-MM-DD h:mm A');
-    const dateB = moment(`${b.meetingDate} ${b.meetingTime}`, 'YYYY-MM-DD h:mm A');
-    return dateA.valueOf() - dateB.valueOf();
-  });
-  
-  res.json({ meetings });
-});
-
-// Cancel a meeting
-app.post('/api/meetings/:id/cancel', (req, res) => {
-  const { id } = req.params;
-  
-  const meeting = db.meetings.get(id);
-  
-  if (!meeting) {
-    return res.status(404).json({ error: 'Meeting not found' });
-  }
-  
-  // Update meeting status
-  meeting.status = 'cancelled';
-  
-  // Make time slot available again
-  db.freeSlot(meeting.meetingDate, meeting.meetingTime);
-  
-  res.json({ success: true, message: 'Meeting cancelled successfully' });
-});
+// ==================== API ROUTES ====================
 
 // Health check
 app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
-    timestamp: new Date().toISOString(),
-    meetings: db.meetings.size,
-    availableSlots: Array.from(db.availability.values()).filter(s => s.isAvailable).length
-  });
+    res.json({
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+        environment: process.env.NODE_ENV || 'production',
+        database: db ? 'connected' : 'disconnected'
+    });
 });
 
-// Root endpoint
-app.get('/', (req, res) => {
-  res.json({
-    message: 'Corprex Meeting Scheduler API',
-    endpoints: {
-      health: '/api/health',
-      availableDates: '/api/availability/dates?year=2025&month=1',
-      availableTimes: '/api/availability/times?date=2025-01-30',
-      bookMeeting: 'POST /api/meetings/book',
-      allMeetings: '/api/meetings',
-      cancelMeeting: 'POST /api/meetings/:id/cancel'
+// Authentication endpoints
+app.post('/api/auth/login', async (req, res) => {
+    try {
+        const { username, password } = req.body;
+        
+        if (!username || !password) {
+            return res.status(400).json({ error: 'Username and password required' });
+        }
+        
+        const user = await collections.users.findOne({ username });
+        
+        if (!user || user.password !== hashPassword(password)) {
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+        
+        const token = generateToken();
+        const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+        
+        await collections.sessions.insertOne({
+            token,
+            user: {
+                id: user._id.toString(),
+                username: user.username,
+                role: user.role
+            },
+            createdAt: new Date(),
+            expiresAt
+        });
+        
+        // Update last active
+        await collections.users.updateOne(
+            { _id: user._id },
+            { $set: { lastActive: new Date() } }
+        );
+        
+        res.json({
+            token,
+            user: {
+                id: user._id.toString(),
+                username: user.username,
+                role: user.role
+            },
+            expiresAt
+        });
+    } catch (error) {
+        console.error('Login error:', error);
+        res.status(500).json({ error: 'Login failed' });
     }
-  });
+});
+
+app.post('/api/auth/logout', authenticate, async (req, res) => {
+    try {
+        const token = req.headers.authorization?.split(' ')[1];
+        await collections.sessions.deleteOne({ token });
+        res.json({ message: 'Logged out successfully' });
+    } catch (error) {
+        console.error('Logout error:', error);
+        res.status(500).json({ error: 'Logout failed' });
+    }
+});
+
+// User management
+app.get('/api/users', authenticate, requireAdmin, async (req, res) => {
+    try {
+        const users = await collections.users.find({}).toArray();
+        
+        const sanitizedUsers = users.map(u => ({
+            id: u._id.toString(),
+            username: u.username,
+            role: u.role,
+            modelAccess: u.modelAccess || [],
+            createdAt: u.createdAt,
+            lastActive: u.lastActive
+        }));
+        
+        res.json(sanitizedUsers);
+    } catch (error) {
+        console.error('Error fetching users:', error);
+        res.status(500).json({ error: 'Failed to fetch users' });
+    }
+});
+
+app.post('/api/users', authenticate, requireAdmin, async (req, res) => {
+    try {
+        const { username, password, role = 'user', modelAccess = [] } = req.body;
+        
+        if (!username || !password) {
+            return res.status(400).json({ error: 'Username and password required' });
+        }
+        
+        // Check if user exists
+        const existing = await collections.users.findOne({ username });
+        if (existing) {
+            return res.status(400).json({ error: 'User already exists' });
+        }
+        
+        const result = await collections.users.insertOne({
+            username,
+            password: hashPassword(password),
+            role,
+            modelAccess,
+            createdAt: new Date(),
+            lastActive: null
+        });
+        
+        res.json({
+            id: result.insertedId.toString(),
+            username,
+            role,
+            modelAccess
+        });
+    } catch (error) {
+        console.error('Error creating user:', error);
+        res.status(500).json({ error: 'Failed to create user' });
+    }
+});
+
+app.put('/api/users/:username/models', authenticate, requireAdmin, async (req, res) => {
+    try {
+        const { username } = req.params;
+        const { modelAccess } = req.body;
+        
+        const result = await collections.users.updateOne(
+            { username },
+            { $set: { modelAccess } }
+        );
+        
+        if (result.matchedCount === 0) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        res.json({ message: 'Model access updated', modelAccess });
+    } catch (error) {
+        console.error('Error updating model access:', error);
+        res.status(500).json({ error: 'Failed to update model access' });
+    }
+});
+
+app.delete('/api/users/:username', authenticate, requireAdmin, async (req, res) => {
+    try {
+        const { username } = req.params;
+        
+        if (username === 'admin') {
+            return res.status(400).json({ error: 'Cannot delete admin user' });
+        }
+        
+        const result = await collections.users.deleteOne({ username });
+        
+        if (result.deletedCount === 0) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        // Also delete user's sessions
+        await collections.sessions.deleteMany({ 'user.username': username });
+        
+        res.json({ message: 'User deleted successfully' });
+    } catch (error) {
+        console.error('Error deleting user:', error);
+        res.status(500).json({ error: 'Failed to delete user' });
+    }
+});
+
+// Model management
+app.get('/api/models', authenticate, async (req, res) => {
+    try {
+        const models = await collections.models.find({}).toArray();
+        
+        // Filter based on user access if not admin
+        if (req.user.role !== 'admin') {
+            const user = await collections.users.findOne({ username: req.user.username });
+            const userAccess = user.modelAccess || [];
+            
+            const filteredModels = models.filter(m => 
+                userAccess.includes('all') || userAccess.includes(m.modelId)
+            );
+            
+            return res.json(filteredModels);
+        }
+        
+        res.json(models);
+    } catch (error) {
+        console.error('Error fetching models:', error);
+        res.status(500).json({ error: 'Failed to fetch models' });
+    }
+});
+
+app.post('/api/models', authenticate, requireAdmin, async (req, res) => {
+    try {
+        const { modelId, name, provider, endpoint, apiKeyRequired = true } = req.body;
+        
+        if (!modelId || !name || !provider) {
+            return res.status(400).json({ error: 'Model ID, name, and provider required' });
+        }
+        
+        // Check if model exists
+        const existing = await collections.models.findOne({ modelId });
+        if (existing) {
+            return res.status(400).json({ error: 'Model already exists' });
+        }
+        
+        const result = await collections.models.insertOne({
+            modelId,
+            name,
+            provider,
+            endpoint,
+            apiKeyRequired,
+            enabled: false,
+            createdAt: new Date()
+        });
+        
+        res.json({
+            id: result.insertedId.toString(),
+            modelId,
+            name,
+            provider,
+            enabled: false
+        });
+    } catch (error) {
+        console.error('Error adding model:', error);
+        res.status(500).json({ error: 'Failed to add model' });
+    }
+});
+
+app.put('/api/models/:modelId', authenticate, requireAdmin, async (req, res) => {
+    try {
+        const { modelId } = req.params;
+        const updates = req.body;
+        
+        const result = await collections.models.updateOne(
+            { modelId },
+            { $set: updates }
+        );
+        
+        if (result.matchedCount === 0) {
+            return res.status(404).json({ error: 'Model not found' });
+        }
+        
+        const updated = await collections.models.findOne({ modelId });
+        res.json(updated);
+    } catch (error) {
+        console.error('Error updating model:', error);
+        res.status(500).json({ error: 'Failed to update model' });
+    }
+});
+
+app.delete('/api/models/:modelId', authenticate, requireAdmin, async (req, res) => {
+    try {
+        const { modelId } = req.params;
+        
+        const result = await collections.models.deleteOne({ modelId });
+        
+        if (result.deletedCount === 0) {
+            return res.status(404).json({ error: 'Model not found' });
+        }
+        
+        res.json({ message: 'Model deleted successfully' });
+    } catch (error) {
+        console.error('Error deleting model:', error);
+        res.status(500).json({ error: 'Failed to delete model' });
+    }
+});
+
+// API Key management
+app.get('/api/keys', authenticate, requireAdmin, async (req, res) => {
+    try {
+        const keys = await collections.apiKeys.findOne({ _id: 'main' });
+        
+        if (!keys) {
+            return res.json({});
+        }
+        
+        // Mask the keys
+        const maskedKeys = {};
+        for (const [provider, key] of Object.entries(keys)) {
+            if (provider !== '_id' && provider !== 'updatedAt' && key) {
+                maskedKeys[provider] = key.substring(0, 6) + '...' + key.substring(key.length - 4);
+            } else if (provider !== '_id' && provider !== 'updatedAt') {
+                maskedKeys[provider] = '';
+            }
+        }
+        
+        res.json(maskedKeys);
+    } catch (error) {
+        console.error('Error fetching API keys:', error);
+        res.status(500).json({ error: 'Failed to fetch API keys' });
+    }
+});
+
+app.put('/api/keys/:provider', authenticate, requireAdmin, async (req, res) => {
+    try {
+        const { provider } = req.params;
+        const { apiKey } = req.body;
+        
+        await collections.apiKeys.updateOne(
+            { _id: 'main' },
+            {
+                $set: {
+                    [provider]: apiKey,
+                    updatedAt: new Date()
+                }
+            },
+            { upsert: true }
+        );
+        
+        res.json({ message: 'API key updated successfully' });
+    } catch (error) {
+        console.error('Error updating API key:', error);
+        res.status(500).json({ error: 'Failed to update API key' });
+    }
+});
+
+// Usage tracking
+app.post('/api/usage', authenticate, async (req, res) => {
+    try {
+        const { model, input, output, tokens = 0 } = req.body;
+        
+        await collections.usage.insertOne({
+            username: req.user.username,
+            userId: req.user.id,
+            model,
+            input: input.substring(0, 500),
+            output: output.substring(0, 500),
+            tokens,
+            timestamp: new Date()
+        });
+        
+        res.json({ message: 'Usage recorded' });
+    } catch (error) {
+        console.error('Error recording usage:', error);
+        res.status(500).json({ error: 'Failed to record usage' });
+    }
+});
+
+app.get('/api/usage', authenticate, requireAdmin, async (req, res) => {
+    try {
+        const { limit = 100, offset = 0, username, model, startDate, endDate } = req.query;
+        
+        const query = {};
+        
+        if (username) query.username = username;
+        if (model) query.model = model;
+        if (startDate || endDate) {
+            query.timestamp = {};
+            if (startDate) query.timestamp.$gte = new Date(startDate);
+            if (endDate) query.timestamp.$lte = new Date(endDate);
+        }
+        
+        const usage = await collections.usage
+            .find(query)
+            .sort({ timestamp: -1 })
+            .limit(parseInt(limit))
+            .skip(parseInt(offset))
+            .toArray();
+        
+        const total = await collections.usage.countDocuments(query);
+        
+        res.json({
+            data: usage,
+            total,
+            limit: parseInt(limit),
+            offset: parseInt(offset)
+        });
+    } catch (error) {
+        console.error('Error fetching usage:', error);
+        res.status(500).json({ error: 'Failed to fetch usage' });
+    }
+});
+
+app.get('/api/usage/stats', authenticate, requireAdmin, async (req, res) => {
+    try {
+        const totalRequests = await collections.usage.countDocuments();
+        
+        const uniqueUsers = await collections.usage.distinct('username');
+        
+        const modelUsage = await collections.usage.aggregate([
+            {
+                $group: {
+                    _id: '$model',
+                    count: { $sum: 1 }
+                }
+            }
+        ]).toArray();
+        
+        const userActivity = await collections.usage.aggregate([
+            {
+                $group: {
+                    _id: '$username',
+                    count: { $sum: 1 }
+                }
+            }
+        ]).toArray();
+        
+        const recentActivity = await collections.usage
+            .find({})
+            .sort({ timestamp: -1 })
+            .limit(10)
+            .project({ username: 1, model: 1, timestamp: 1 })
+            .toArray();
+        
+        const modelUsageMap = {};
+        modelUsage.forEach(m => {
+            modelUsageMap[m._id] = m.count;
+        });
+        
+        const userActivityMap = {};
+        userActivity.forEach(u => {
+            userActivityMap[u._id] = u.count;
+        });
+        
+        res.json({
+            totalRequests,
+            uniqueUsers: uniqueUsers.length,
+            modelUsage: modelUsageMap,
+            userActivity: userActivityMap,
+            recentActivity
+        });
+    } catch (error) {
+        console.error('Error calculating stats:', error);
+        res.status(500).json({ error: 'Failed to calculate statistics' });
+    }
+});
+
+// Chat endpoint (proxy to AI providers)
+app.post('/api/chat', authenticate, async (req, res) => {
+    try {
+        const { model, messages } = req.body;
+        
+        // Check user access to model
+        if (req.user.role !== 'admin') {
+            const user = await collections.users.findOne({ username: req.user.username });
+            const userAccess = user.modelAccess || [];
+            
+            if (!userAccess.includes('all') && !userAccess.includes(model)) {
+                return res.status(403).json({ error: 'Access denied to this model' });
+            }
+        }
+        
+        // Get model configuration
+        const modelConfig = await collections.models.findOne({ modelId: model });
+        
+        if (!modelConfig || !modelConfig.enabled) {
+            return res.status(400).json({ error: 'Model not available' });
+        }
+        
+        // Get API keys
+        const apiKeys = await collections.apiKeys.findOne({ _id: 'main' });
+        const apiKey = apiKeys?.[modelConfig.provider];
+        
+        if (!apiKey && modelConfig.apiKeyRequired) {
+            return res.status(500).json({ error: 'API key not configured for this model' });
+        }
+        
+        // Here you would make the actual API call to the provider
+        // For now, returning a mock response
+        const mockResponse = {
+            role: 'assistant',
+            content: `[Demo Response from ${modelConfig.name}] I received your message: "${messages[messages.length - 1].content}". In production, this would be the actual AI response.`
+        };
+        
+        // Record usage
+        await collections.usage.insertOne({
+            username: req.user.username,
+            userId: req.user.id,
+            model,
+            input: messages[messages.length - 1].content.substring(0, 500),
+            output: mockResponse.content.substring(0, 500),
+            tokens: 100,
+            timestamp: new Date()
+        });
+        
+        res.json(mockResponse);
+    } catch (error) {
+        console.error('Chat error:', error);
+        res.status(500).json({ error: 'Failed to process chat request' });
+    }
+});
+
+// Static file serving for admin dashboard
+app.get('/admin', (req, res) => {
+    res.sendFile(__dirname + '/public/admin-dashboard.html');
 });
 
 // Start server
-const server = app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Health check: http://localhost:${PORT}/api/health`);
+async function startServer() {
+    await connectDB();
+    
+    app.listen(PORT, () => {
+        console.log(`
+========================================
+🚀 Corprex Backend Server Running
+========================================
+Port: ${PORT}
+Environment: ${process.env.NODE_ENV || 'production'}
+Database: MongoDB Atlas
+Admin Login: username: admin, password: admin123
+API Base URL: http://localhost:${PORT}/api
+Admin Dashboard: http://localhost:${PORT}/admin
+========================================
+        `);
+    });
+}
+
+// Handle graceful shutdown
+process.on('SIGTERM', () => {
+    console.log('SIGTERM received, closing server...');
+    process.exit(0);
 });
 
-// Graceful shutdown
-process.on('SIGINT', () => {
-  console.log('Shutting down gracefully...');
-  server.close(() => {
-    console.log('Server closed.');
-    process.exit(0);
-  });
-});
+startServer().catch(console.error);
